@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
 ================================================================================
-  THERMA SILESIA - LOYALTY SYSTEM APPLICATION (v1.4)
+  THERMA SILESIA - LOYALTY SYSTEM APPLICATION (v1.6)
 ================================================================================
 
   [APPLICATION OVERVIEW]
@@ -9,7 +9,7 @@
   designed for Therma Silesia reception desks (optimized for tablets/mobile).
   It eliminates paper loyalty cards by using encrypted/scrambled QR codes on
   physical cards while maintaining a clean, sequential card ID (#100, #101...)
-  for staff convenience. TEST
+  for staff convenience.
 
   [CORE BUSINESS LOGIC & RULES]
   1. STAMP ACCUMULATION & REWARDS:
@@ -46,6 +46,11 @@
        (Green for PROD, Red for TEST).
      - Provides a live Daily Report (scans today & free visits redeemed today).
      - Allows environment switching, test database wipes, and JSON backups.
+
+  [V1.6 BUG FIXES]
+  - Fixed issue where scanning a QR code in Auto mode did not switch UI mode to Read Mode.
+  - Fixed background camera scanning loop that caused audio beeps and timer resets
+    every 2.5 seconds when displaying an open card result.
 ================================================================================
 -->
 <html lang="pl">
@@ -286,7 +291,7 @@
             display: inline-block;
         }
 
-        /* Staff Manual Override Controls (+1 / -1 Free Entries) */
+        /* Staff Manual Override Controls (+1 / -1 Free Visits) */
         .manual-free-controls {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -662,7 +667,7 @@
     </div>
 
     <!-- =====================================================================
-         CAMERA SCANNER CARD
+         CAMERA SCANNER CONTAINER
          ===================================================================== -->
     <div class="scanner-card">
         <div id="reader"></div>
@@ -812,7 +817,7 @@
          FOOTER
          ===================================================================== -->
     <footer>
-        Therma Silesia Loyalty • Wersja <span class="version-badge">v1.4</span>
+        Therma Silesia Loyalty • Wersja <span class="version-badge">v1.6</span>
     </footer>
 
     <!-- =====================================================================
@@ -871,7 +876,6 @@
          */
         function getDB() {
             const key = getDbKey();
-            // Backward compatibility migration: If new prod DB is empty, copy over legacy 'ts_cards_db'
             if (key === 'ts_cards_db_prod' && !localStorage.getItem('ts_cards_db_prod') && localStorage.getItem('ts_cards_db')) {
                 localStorage.setItem('ts_cards_db_prod', localStorage.getItem('ts_cards_db'));
             }
@@ -910,7 +914,6 @@
 
             for (let key in db) {
                 let card = db[key];
-                // Count scans today
                 if (card && card.history && Array.isArray(card.history)) {
                     card.history.forEach(ts => {
                         if (new Date(ts).toLocaleDateString('sv-SE') === todayStr) {
@@ -918,7 +921,6 @@
                         }
                     });
                 }
-                // Count free visits redeemed today
                 if (card && card.free_history && Array.isArray(card.free_history)) {
                     card.free_history.forEach(ts => {
                         if (new Date(ts).toLocaleDateString('sv-SE') === todayStr) {
@@ -996,7 +998,7 @@
             if (envMode === 'test') {
                 return testDayMode === 'mon-thu';
             }
-            const day = new Date().getDay(); // 0 = Sunday, 1 = Monday, ..., 4 = Thursday
+            const day = new Date().getDay();
             return day >= 1 && day <= 4;
         }
 
@@ -1015,7 +1017,6 @@
                 badge.innerText = prefix + 'PT - ND (ZBIERANIE)';
             }
 
-            // Update settings icon border ring (Green = PROD, Red = TEST)
             if (btnSettings) {
                 if (envMode === 'test') {
                     btnSettings.className = 'btn-header-settings env-test';
@@ -1031,7 +1032,7 @@
 
         /**
          * Plays a synthesized audio frequency tone via Web Audio API.
-         * @param {number} freq - Sound frequency in Hz (e.g. 880 for high beep, 440 for low tone).
+         * @param {number} freq - Sound frequency in Hz.
          * @param {number} duration - Sound duration in seconds.
          */
         function playBeep(freq = 880, duration = 0.15) {
@@ -1051,6 +1052,7 @@
 
         /**
          * Switches the application scanner mode between Automatic and Read-Only.
+         * Pauses camera hardware frame parsing in Read Mode to prevent background scan loops.
          * @param {'auto' | 'read'} mode 
          */
         function setMode(mode) {
@@ -1067,11 +1069,21 @@
                 btnRead.className = 'btn-mode';
                 if (scannerCard) scannerCard.style.display = 'flex';
                 if (emptyState) emptyState.innerText = '📷 Skieruj aparat na kod QR klienta z odległości 15-20 cm.';
+                
+                // Safely resume camera scanning hardware
+                try {
+                    if (html5QrCode) html5QrCode.resume();
+                } catch(e) {}
             } else {
                 btnAuto.className = 'btn-mode';
                 btnRead.className = 'btn-mode active-read';
                 if (scannerCard) scannerCard.style.display = 'none';
                 if (emptyState) emptyState.innerText = '🔍 Wpisz numer karty lub kod QR w polu poniżej, aby wyszukać.';
+                
+                // Safely pause camera scanning hardware to prevent background scan loop (Fixes Bug 2)
+                try {
+                    if (html5QrCode) html5QrCode.pause(true);
+                } catch(e) {}
             }
         }
 
@@ -1190,7 +1202,7 @@
             let db = getDB();
             if (!db[currentToken]) return;
             let current = db[currentToken].available_free_entries || 0;
-            if (current <= 0) return; // Strict zero-floor guard
+            if (current <= 0) return;
             db[currentToken].available_free_entries = current - 1;
             saveDB(db);
             playBeep(440);
@@ -1248,8 +1260,6 @@
             let freeCount = db[token].available_free_entries || 0;
 
             if (isYes) {
-                // YES -> Today's 10th visit is FREE!
-                // Stored banked free visits (freeCount) remain untouched. Stamps reset to 0.
                 if (freeCount === 0) {
                     db[token].rewards_claimed = (db[token].rewards_claimed || 0) + 1;
                 }
@@ -1263,11 +1273,8 @@
                 showRedeemedToast();
                 start15sAutoCloseTimer();
             } else {
-                // NO -> Customer pays for today's 10th visit.
-                // The 10 stamps collected on the card convert to +1 Banked Free Visit.
-                // Stamps reset to 0 (because today's paid 10th visit completed the full card).
                 db[token].available_free_entries = freeCount + 1;
-                db[token].visits = 0; // Correct reset to 0
+                db[token].visits = 0;
                 db[token].history.push(new Date().toISOString());
                 saveDB(db);
                 playBeep(880);
@@ -1281,7 +1288,9 @@
          * @param {string} token - The raw QR token string.
          */
         function handleScan(token) {
-            if (scanCooldown) return;
+            // Guard: Ignore scan attempts if card result is currently open on screen or in anti-bounce cooldown (Fixes Bug 2)
+            if (scanCooldown || document.getElementById('resultCard').style.display === 'block') return;
+
             scanCooldown = true;
             setTimeout(() => { scanCooldown = false; }, 2500);
 
@@ -1293,7 +1302,6 @@
             getOrAssignLoyaltyNumber(token, db);
 
             if (currentMode === 'auto') {
-                // Guard: Prevent double scanning on the same day
                 if (isScannedToday(db[token])) {
                     playBeep(587);
                     setMode('read');
@@ -1308,16 +1316,15 @@
 
                 let freeCount = db[token].available_free_entries || 0;
 
-                // Handle 10th Stamp milestone
                 if (currentStamps === 9) {
                     currentToken = token;
+                    setMode('read'); // Switch UI mode to Read Mode after scanning (Fixes Bug 1)
                     if (isMonToThu()) {
                         playBeep(880);
                         renderCardResult(token, db[token]);
                         prompt10thVisit(token, freeCount);
                         return;
                     } else {
-                        // Weekend Rule: Automatic conversion of 10 stamps to +1 Banked Free Visit
                         playBeep(880);
                         db[token].visits = 0;
                         db[token].available_free_entries = freeCount + 1;
@@ -1329,16 +1336,18 @@
                     }
                 }
 
-                // Standard Visit Addition (+1)
+                // Standard visit addition (+1)
                 playBeep(880);
                 db[token].visits += 1;
                 db[token].history.push(new Date().toISOString());
                 saveDB(db);
                 currentToken = token;
+                
+                // Switch UI mode to Read Mode after adding visit (Fixes Bug 1)
+                setMode('read');
                 renderCardResult(token, db[token]);
                 start15sAutoCloseTimer();
             } else {
-                // Read-Only Mode
                 playBeep(587);
                 currentToken = token;
                 renderCardResult(token, db[token]);
@@ -1489,22 +1498,25 @@
             input.value = '';
         }
 
-        /** Exports the active environment database to a downloadable JSON backup file. */
+        /** 
+         * Exports the active environment database to a downloadable JSON backup file 
+         * including a precise timestamp (Date & Time: YYYY-MM-DD_HH-mm-ss).
+         */
         function exportBackup() {
-    const envTag = envMode.toUpperCase();
-    const now = new Date();
-    const dateStr = now.toISOString().slice(0,10); // Format YYYY-MM-DD
-    const timeStr = now.toTimeString().slice(0,8).replace(/:/g, '-'); // Format HH-MM-SS
-    const timestamp = `${dateStr}_${timeStr}`;
-    
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(localStorage.getItem(getDbKey()) || '{}');
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `therma_silesia_backup_${envTag}_${timestamp}.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
-}
+            const envTag = envMode.toUpperCase();
+            const now = new Date();
+            const dateStr = now.toISOString().slice(0,10); // Format YYYY-MM-DD
+            const timeStr = now.toTimeString().slice(0,8).replace(/:/g, '-'); // Format HH-mm-ss
+            const timestamp = `${dateStr}_${timeStr}`;
+
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(localStorage.getItem(getDbKey()) || '{}');
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", `therma_silesia_backup_${envTag}_${timestamp}.json`);
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        }
 
         /** Initializes the HTML5 camera scanner with fallback handling for multi-lens Android devices. */
         async function initCamera() {
