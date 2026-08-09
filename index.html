@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
 ================================================================================
-  THERMA SILESIA - LOYALTY SYSTEM APPLICATION (v1.6)
+  THERMA SILESIA - LOYALTY SYSTEM APPLICATION (v1.7)
 ================================================================================
 
   [APPLICATION OVERVIEW]
@@ -47,10 +47,10 @@
      - Provides a live Daily Report (scans today & free visits redeemed today).
      - Allows environment switching, test database wipes, and JSON backups.
 
-  [V1.6 BUG FIXES]
-  - Fixed issue where scanning a QR code in Auto mode did not switch UI mode to Read Mode.
-  - Fixed background camera scanning loop that caused audio beeps and timer resets
-    every 2.5 seconds when displaying an open card result.
+  [V1.7 RESPONSIVE LAYOUT ENHANCEMENTS]
+  - Implemented RWD (Responsive Web Design) using CSS clamp() for fluid typography.
+  - Expanded max container width for wide tablets and Fold devices.
+  - Added adaptive layout optimization for Landscape tablet orientations.
 ================================================================================
 -->
 <html lang="pl">
@@ -64,7 +64,7 @@
     
     <style>
         /* =====================================================================
-           GLOBAL DESIGN SYSTEM & CSS VARIABLES
+           GLOBAL DESIGN SYSTEM, RESPONSIVE VARIABLES & RWD BREAKPOINTS
            ===================================================================== */
         :root {
             --bg-main: #0b0f19;              /* Deep dark background */
@@ -87,16 +87,24 @@
         /* Base Resets */
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
         
+        /* Responsive Fluid Layout Body Container */
         body { 
             background-color: var(--bg-main); 
             color: var(--text-main); 
-            padding: 16px;
-            max-width: 500px;
+            padding: clamp(12px, 3vw, 24px);
+            max-width: 680px;                /* Expanded container for tablets */
             margin: 0 auto;
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: clamp(12px, 2.5vw, 20px);
             min-height: 100vh;
+        }
+
+        /* Landscape Orientation Optimization for Tablets / Monitors */
+        @media (min-width: 768px) and (orientation: landscape) {
+            body {
+                max-width: 880px;
+            }
         }
 
         /* =====================================================================
@@ -108,23 +116,23 @@
             align-items: center;
             background: var(--card-bg);
             border: 1px solid var(--card-border);
-            padding: 16px;
+            padding: clamp(12px, 2vw, 18px);
             border-radius: 18px;
             box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
         }
 
-        .logo-group { display: flex; align-items: center; gap: 8px; }
-        .logo-icon { font-size: 1.4rem; filter: drop-shadow(0 0 8px var(--accent-sauna-glow)); }
-        h1 { font-size: 1.05rem; font-weight: 800; letter-spacing: 0.5px; }
-        .subtitle { font-size: 0.7rem; color: var(--text-muted); }
+        .logo-group { display: flex; align-items: center; gap: 10px; }
+        .logo-icon { font-size: clamp(1.3rem, 3vw, 1.6rem); filter: drop-shadow(0 0 8px var(--accent-sauna-glow)); }
+        h1 { font-size: clamp(0.95rem, 2.5vw, 1.25rem); font-weight: 800; letter-spacing: 0.5px; }
+        .subtitle { font-size: clamp(0.65rem, 1.5vw, 0.8rem); color: var(--text-muted); }
 
         .header-controls { display: flex; align-items: center; gap: 10px; }
 
         /* Day-of-week active rules indicator badge */
         .day-indicator {
-            font-size: 0.65rem;
+            font-size: clamp(0.6rem, 1.5vw, 0.75rem);
             font-weight: 800;
-            padding: 4px 6px;
+            padding: 4px 8px;
             border-radius: 6px;
             text-transform: uppercase;
         }
@@ -136,8 +144,8 @@
             background: rgba(255, 255, 255, 0.08);
             color: var(--text-main);
             border-radius: 10px;
-            padding: 6px 10px;
-            font-size: 1.1rem;
+            padding: clamp(6px, 1.5vw, 10px) clamp(8px, 2vw, 12px);
+            font-size: clamp(1rem, 2.5vw, 1.25rem);
             cursor: pointer;
             transition: all 0.25s ease;
         }
@@ -165,8 +173,8 @@
         }
 
         .btn-mode {
-            padding: 14px 10px;
-            font-size: 0.9rem;
+            padding: clamp(12px, 2.5vw, 16px) 10px;
+            font-size: clamp(0.85rem, 2vw, 1rem);
             font-weight: 700;
             border: none;
             border-radius: 12px;
@@ -199,7 +207,7 @@
             background: var(--card-bg);
             border: 1px solid var(--card-border);
             border-radius: 20px;
-            padding: 16px;
+            padding: clamp(12px, 2.5vw, 20px);
             position: relative;
             overflow: hidden;
             box-shadow: 0 10px 30px rgba(0,0,0,0.4);
@@ -213,19 +221,19 @@
             border-radius: 14px;
             overflow: hidden;
             background: #000;
-            min-height: 260px;
+            min-height: clamp(240px, 40vh, 360px);
             border: 2px solid rgba(255, 255, 255, 0.05);
         }
 
         .btn-cam-trigger {
             width: 100%;
-            padding: 12px;
+            padding: clamp(10px, 2vw, 14px);
             background: rgba(255, 255, 255, 0.08);
             border: 1px solid var(--card-border);
             color: var(--text-main);
             border-radius: 12px;
             font-weight: 700;
-            font-size: 0.9rem;
+            font-size: clamp(0.85rem, 2vw, 0.95rem);
             cursor: pointer;
             transition: background 0.2s;
         }
@@ -237,7 +245,7 @@
             background: var(--card-bg);
             border: 1px solid var(--card-border);
             border-radius: 20px;
-            padding: 20px;
+            padding: clamp(16px, 3vw, 24px);
             box-shadow: 0 10px 30px rgba(0,0,0,0.4);
             animation: fadeIn 0.3s ease-out;
         }
@@ -253,7 +261,7 @@
             gap: 6px;
             padding: 6px 16px;
             border-radius: 30px;
-            font-size: 0.8rem;
+            font-size: clamp(0.75rem, 1.8vw, 0.85rem);
             font-weight: 800;
             letter-spacing: 0.5px;
             margin-bottom: 12px;
@@ -266,7 +274,7 @@
 
         .token-info {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 1.6rem;
+            font-size: clamp(1.4rem, 4vw, 1.8rem);
             font-weight: 900;
             color: #fff;
             background: rgba(0, 0, 0, 0.5);
@@ -286,7 +294,7 @@
             padding: 8px 14px;
             border-radius: 12px;
             font-weight: 800;
-            font-size: 0.9rem;
+            font-size: clamp(0.8rem, 2vw, 0.95rem);
             margin-bottom: 12px;
             display: inline-block;
         }
@@ -300,9 +308,9 @@
         }
 
         .btn-mgmt-free {
-            padding: 10px 8px;
+            padding: clamp(8px, 1.8vw, 12px) 8px;
             border-radius: 10px;
-            font-size: 0.8rem;
+            font-size: clamp(0.75rem, 1.8vw, 0.85rem);
             font-weight: 800;
             cursor: pointer;
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -315,12 +323,12 @@
 
         .btn-use-free {
             width: 100%;
-            padding: 14px;
+            padding: clamp(12px, 2.5vw, 16px);
             background: linear-gradient(135deg, #d97706, #b45309);
             border: 1px solid rgba(251, 191, 36, 0.4);
             color: #ffffff;
             border-radius: 14px;
-            font-size: 1rem;
+            font-size: clamp(0.9rem, 2.2vw, 1.05rem);
             font-weight: 900;
             cursor: pointer;
             margin-bottom: 16px;
@@ -337,7 +345,7 @@
             margin-bottom: 16px;
             text-align: center;
         }
-        .redeemed-title { color: #34d399; font-weight: 900; font-size: 1.1rem; margin-bottom: 8px; }
+        .redeemed-title { color: #34d399; font-weight: 900; font-size: clamp(1rem, 2.5vw, 1.2rem); margin-bottom: 8px; }
         .btn-toast-close {
             background: var(--accent-red);
             color: #ffffff;
@@ -349,7 +357,7 @@
             margin-top: 6px;
         }
 
-        /* Stamps Display Grid */
+        /* Responsive Stamps Display Ratio & Grid */
         .visits-container {
             display: flex;
             align-items: baseline;
@@ -358,15 +366,15 @@
             margin-bottom: 8px;
         }
 
-        .visits-number { font-size: 3.8rem; font-weight: 900; color: var(--text-main); line-height: 1; }
-        .visits-total { font-size: 1.6rem; color: var(--text-muted); font-weight: 700; }
+        .visits-number { font-size: clamp(3.2rem, 10vw, 4.2rem); font-weight: 900; color: var(--text-main); line-height: 1; }
+        .visits-total { font-size: clamp(1.4rem, 4vw, 1.8rem); color: var(--text-muted); font-weight: 700; }
 
-        .stamps-hint { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 12px; }
+        .stamps-hint { font-size: clamp(0.7rem, 1.5vw, 0.8rem); color: var(--text-muted); margin-bottom: 12px; }
 
         .stamps-grid {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 10px;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: clamp(6px, 1.8vw, 12px);
             margin: 12px 0;
         }
 
@@ -378,7 +386,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.2rem;
+            font-size: clamp(1rem, 3vw, 1.3rem);
             font-weight: 800;
             color: var(--text-muted);
             cursor: pointer;
@@ -405,7 +413,7 @@
         }
 
         .reset-toast {
-            font-size: 0.85rem;
+            font-size: clamp(0.8rem, 1.8vw, 0.9rem);
             color: #60a5fa;
             text-align: center;
             margin-top: 12px;
@@ -414,12 +422,12 @@
 
         .btn-close-card {
             width: 100%;
-            padding: 14px;
+            padding: clamp(12px, 2.5vw, 16px);
             background: linear-gradient(135deg, #ef4444, #dc2626);
             border: 1px solid rgba(239, 68, 68, 0.4);
             color: #ffffff;
             border-radius: 14px;
-            font-size: 1rem;
+            font-size: clamp(0.9rem, 2.2vw, 1.05rem);
             font-weight: 800;
             cursor: pointer;
             margin-top: 16px;
@@ -454,7 +462,7 @@
             border: none;
             padding: 8px 12px;
             color: #fff;
-            font-size: 0.95rem;
+            font-size: clamp(0.85rem, 2vw, 1rem);
             outline: none;
         }
 
@@ -462,9 +470,10 @@
             background: var(--accent-green) !important;
             color: #ffffff !important;
             border: none;
-            padding: 8px 16px;
+            padding: 8px clamp(12px, 2.5vw, 20px);
             border-radius: 8px;
             font-weight: 800;
+            font-size: clamp(0.85rem, 2vw, 0.95rem);
             cursor: pointer;
             box-shadow: 0 4px 12px var(--accent-green-glow);
             transition: transform 0.15s;
@@ -490,10 +499,12 @@
             background: var(--card-bg);
             border: 2px solid var(--accent-sauna);
             border-radius: 24px;
-            padding: 24px;
+            padding: clamp(18px, 4vw, 28px);
             text-align: center;
-            max-width: 400px;
+            max-width: 420px;
             width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
             box-shadow: 0 10px 40px var(--accent-sauna-glow);
             animation: popIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             display: flex;
@@ -506,17 +517,17 @@
             to { transform: scale(1); opacity: 1; }
         }
 
-        .modal-icon { font-size: 2.8rem; margin-bottom: -8px; }
-        .modal-card h2 { font-size: 1.4rem; font-weight: 900; color: #fff; }
-        .modal-card p { font-size: 0.9rem; color: var(--text-muted); line-height: 1.4; }
+        .modal-icon { font-size: clamp(2.2rem, 5vw, 3rem); margin-bottom: -8px; }
+        .modal-card h2 { font-size: clamp(1.2rem, 3vw, 1.5rem); font-weight: 900; color: #fff; }
+        .modal-card p { font-size: clamp(0.85rem, 2vw, 0.95rem); color: var(--text-muted); line-height: 1.4; }
 
         .modal-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
         .btn-modal {
-            padding: 14px;
+            padding: clamp(10px, 2.5vw, 14px);
             border: none;
             border-radius: 14px;
-            font-size: 1.1rem;
+            font-size: clamp(0.95rem, 2.2vw, 1.1rem);
             font-weight: 900;
             cursor: pointer;
             color: #ffffff !important;
@@ -538,8 +549,8 @@
             text-align: center;
         }
 
-        .report-item-val { font-size: 1.8rem; font-weight: 900; color: #fff; }
-        .report-item-lbl { font-size: 0.7rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; }
+        .report-item-val { font-size: clamp(1.5rem, 4vw, 2rem); font-weight: 900; color: #fff; }
+        .report-item-lbl { font-size: clamp(0.65rem, 1.5vw, 0.75rem); color: var(--text-muted); font-weight: 700; text-transform: uppercase; }
 
         /* Settings Environment Switcher */
         .env-control-group {
@@ -606,7 +617,7 @@
             color: #ffffff;
             border-radius: 12px;
             font-weight: 800;
-            font-size: 0.85rem;
+            font-size: clamp(0.8rem, 2vw, 0.9rem);
             cursor: pointer;
             transition: background 0.2s;
             display: flex;
@@ -624,7 +635,7 @@
         /* Footer Copyright */
         footer {
             margin-top: auto; padding-top: 16px; padding-bottom: 8px;
-            text-align: center; font-size: 0.75rem; color: var(--text-muted); opacity: 0.8;
+            text-align: center; font-size: clamp(0.7rem, 1.5vw, 0.8rem); color: var(--text-muted); opacity: 0.8;
         }
 
         .version-badge {
@@ -817,7 +828,7 @@
          FOOTER
          ===================================================================== -->
     <footer>
-        Therma Silesia Loyalty • Wersja <span class="version-badge">v1.6</span>
+        Therma Silesia Loyalty • Wersja <span class="version-badge">v1.7</span>
     </footer>
 
     <!-- =====================================================================
@@ -1070,7 +1081,6 @@
                 if (scannerCard) scannerCard.style.display = 'flex';
                 if (emptyState) emptyState.innerText = '📷 Skieruj aparat na kod QR klienta z odległości 15-20 cm.';
                 
-                // Safely resume camera scanning hardware
                 try {
                     if (html5QrCode) html5QrCode.resume();
                 } catch(e) {}
@@ -1080,7 +1090,6 @@
                 if (scannerCard) scannerCard.style.display = 'none';
                 if (emptyState) emptyState.innerText = '🔍 Wpisz numer karty lub kod QR w polu poniżej, aby wyszukać.';
                 
-                // Safely pause camera scanning hardware to prevent background scan loop (Fixes Bug 2)
                 try {
                     if (html5QrCode) html5QrCode.pause(true);
                 } catch(e) {}
@@ -1288,7 +1297,6 @@
          * @param {string} token - The raw QR token string.
          */
         function handleScan(token) {
-            // Guard: Ignore scan attempts if card result is currently open on screen or in anti-bounce cooldown (Fixes Bug 2)
             if (scanCooldown || document.getElementById('resultCard').style.display === 'block') return;
 
             scanCooldown = true;
@@ -1318,7 +1326,7 @@
 
                 if (currentStamps === 9) {
                     currentToken = token;
-                    setMode('read'); // Switch UI mode to Read Mode after scanning (Fixes Bug 1)
+                    setMode('read');
                     if (isMonToThu()) {
                         playBeep(880);
                         renderCardResult(token, db[token]);
@@ -1336,14 +1344,12 @@
                     }
                 }
 
-                // Standard visit addition (+1)
                 playBeep(880);
                 db[token].visits += 1;
                 db[token].history.push(new Date().toISOString());
                 saveDB(db);
                 currentToken = token;
                 
-                // Switch UI mode to Read Mode after adding visit (Fixes Bug 1)
                 setMode('read');
                 renderCardResult(token, db[token]);
                 start15sAutoCloseTimer();
