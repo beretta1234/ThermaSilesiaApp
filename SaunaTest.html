@@ -1,0 +1,1555 @@
+<!DOCTYPE html>
+<!--
+================================================================================
+  THERMA SILESIA - LOYALTY SYSTEM APPLICATION (v1.4)
+================================================================================
+
+  [APPLICATION OVERVIEW]
+  A web-based, privacy-first, offline-capable loyalty card management system
+  designed for Therma Silesia reception desks (optimized for tablets/mobile).
+  It eliminates paper loyalty cards by using encrypted/scrambled QR codes on
+  physical cards while maintaining a clean, sequential card ID (#100, #101...)
+  for staff convenience.
+
+  [CORE BUSINESS LOGIC & RULES]
+  1. STAMP ACCUMULATION & REWARDS:
+     - 10 stamps collected = 1 Free Visit reward.
+     - Stamps cycle from 0 to 10. Manual stamp editing is supported (+1/-1).
+  
+  2. REDEMPTION POLICY (MONDAY - THURSDAY ONLY):
+     - Free visits can ONLY be redeemed between Monday and Thursday.
+     - On Weekends (Friday - Sunday): Stamp collection remains active, but 
+       reward redemption is strictly blocked.
+     - When a customer reaches their 10th stamp on a Weekend, the 10th visit
+       automatically converts into "+1 Available Free Visit" stored in their
+       account bank for future mid-week use.
+
+  3. DAILY SCAN PREVENTION:
+     - The system tracks historical scan timestamps.
+     - If a card is scanned a second time on the same calendar day, automatic
+       visit increment is blocked, a warning badge is displayed, and the app
+       switches to Read-Only Mode.
+
+  4. SEQUENTIAL LOYALTY NUMBERING:
+     - Physical cards display complex QR code tokens (e.g., TS-x91!#Z82).
+     - The system maps complex QR tokens to simple human-readable loyalty 
+       numbers starting sequentially from #100 upwards.
+
+  5. DUAL ENVIRONMENT DATABASES (PROD vs TEST):
+     - PROD DB ('ts_cards_db_prod'): Real customer loyalty records.
+     - TEST DB ('ts_cards_db_test'): Isolated sandbox environment for testing
+       and training without affecting production data.
+     - Features day-of-week simulation in TEST mode to verify weekend rules.
+
+  6. MANAGEMENT & REPORTING PANEL (⚙️):
+     - Hidden behind the settings icon with a visual status indicator ring
+       (Green for PROD, Red for TEST).
+     - Provides a live Daily Report (scans today & free visits redeemed today).
+     - Allows environment switching, test database wipes, and JSON backups.
+================================================================================
+-->
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Therma Silesia - System Lojalnościowy</title>
+    
+    <!-- External Library: html5-qrcode for browser-based QR code camera scanning -->
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    
+    <style>
+        /* =====================================================================
+           GLOBAL DESIGN SYSTEM & CSS VARIABLES
+           ===================================================================== */
+        :root {
+            --bg-main: #0b0f19;              /* Deep dark background */
+            --card-bg: #161e2e;              /* Container background */
+            --card-border: rgba(255, 255, 255, 0.08);
+            --accent-sauna: #f97316;         /* Primary brand orange */
+            --accent-sauna-glow: rgba(249, 115, 22, 0.35);
+            --accent-blue: #3b82f6;          /* Read Mode / Info blue */
+            --accent-blue-glow: rgba(59, 130, 246, 0.35);
+            --accent-green: #10b981;         /* Success / Auto Mode green */
+            --accent-green-glow: rgba(16, 185, 129, 0.35);
+            --accent-red: #ef4444;           /* Danger / Close button red */
+            --accent-red-glow: rgba(239, 68, 68, 0.35);
+            --accent-amber: #d97706;         /* Free entry button amber */
+            --accent-amber-glow: rgba(217, 119, 6, 0.35);
+            --text-main: #f8fafc;            /* Primary light text */
+            --text-muted: #94a3b8;           /* Muted secondary text */
+        }
+
+        /* Base Resets */
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        
+        body { 
+            background-color: var(--bg-main); 
+            color: var(--text-main); 
+            padding: 16px;
+            max-width: 500px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-height: 100vh;
+        }
+
+        /* =====================================================================
+           HEADER SECTION & ENVIRONMENT STATUS INDICATOR
+           ===================================================================== */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            padding: 16px;
+            border-radius: 18px;
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
+        }
+
+        .logo-group { display: flex; align-items: center; gap: 8px; }
+        .logo-icon { font-size: 1.4rem; filter: drop-shadow(0 0 8px var(--accent-sauna-glow)); }
+        h1 { font-size: 1.05rem; font-weight: 800; letter-spacing: 0.5px; }
+        .subtitle { font-size: 0.7rem; color: var(--text-muted); }
+
+        .header-controls { display: flex; align-items: center; gap: 10px; }
+
+        /* Day-of-week active rules indicator badge */
+        .day-indicator {
+            font-size: 0.65rem;
+            font-weight: 800;
+            padding: 4px 6px;
+            border-radius: 6px;
+            text-transform: uppercase;
+        }
+        .day-active { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+        .day-weekend { background: rgba(217, 119, 6, 0.2); color: #fbbf24; border: 1px solid rgba(217, 119, 6, 0.4); }
+
+        /* Settings button with dynamic environment border ring (PROD=Green, TEST=Red) */
+        .btn-header-settings {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-main);
+            border-radius: 10px;
+            padding: 6px 10px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+        .btn-header-settings.env-prod {
+            border: 2px solid var(--accent-green);
+            box-shadow: 0 0 10px var(--accent-green-glow);
+        }
+        .btn-header-settings.env-test {
+            border: 2px solid var(--accent-red);
+            box-shadow: 0 0 10px var(--accent-red-glow);
+        }
+        .btn-header-settings:active { transform: scale(0.95); }
+
+        /* =====================================================================
+           SCANNER MODE SWITCHER (AUTO vs READ)
+           ===================================================================== */
+        .mode-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            background: rgba(15, 23, 42, 0.6);
+            padding: 6px;
+            border-radius: 16px;
+            border: 1px solid var(--card-border);
+        }
+
+        .btn-mode {
+            padding: 14px 10px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            color: var(--text-muted);
+            background: transparent;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-mode.active-auto {
+            background: var(--accent-green);
+            color: #fff;
+            box-shadow: 0 4px 15px var(--accent-green-glow);
+        }
+
+        .btn-mode.active-read {
+            background: var(--accent-blue);
+            color: #fff;
+            box-shadow: 0 4px 15px var(--accent-blue-glow);
+        }
+
+        /* =====================================================================
+           CAMERA SCANNER CONTAINER
+           ===================================================================== */
+        .scanner-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 20px;
+            padding: 16px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        #reader {
+            width: 100%;
+            border-radius: 14px;
+            overflow: hidden;
+            background: #000;
+            min-height: 260px;
+            border: 2px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .btn-cam-trigger {
+            width: 100%;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--card-border);
+            color: var(--text-main);
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        /* =====================================================================
+           CUSTOMER CARD RESULT DISPLAY
+           ===================================================================== */
+        .result-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            border-radius: 30px;
+            font-size: 0.8rem;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+        }
+
+        .badge-auto { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-read { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+        .badge-warn { background: rgba(234, 179, 8, 0.18); color: #fde047; border: 1px solid rgba(234, 179, 8, 0.4); }
+
+        .token-info {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 1.6rem;
+            font-weight: 900;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px 20px;
+            border-radius: 14px;
+            border: 1px solid rgba(249, 115, 22, 0.5);
+            display: inline-block;
+            margin-bottom: 12px;
+            letter-spacing: 1.5px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+        }
+
+        .free-entries-badge {
+            background: rgba(217, 119, 6, 0.2);
+            border: 1px solid rgba(217, 119, 6, 0.5);
+            color: #fef08a;
+            padding: 8px 14px;
+            border-radius: 12px;
+            font-weight: 800;
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+            display: inline-block;
+        }
+
+        /* Staff Manual Override Controls (+1 / -1 Free Entries) */
+        .manual-free-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .btn-mgmt-free {
+            padding: 10px 8px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            font-weight: 800;
+            cursor: pointer;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            transition: transform 0.15s;
+        }
+        .btn-mgmt-free:active { transform: scale(0.95); }
+        .btn-mgmt-add { background: rgba(16, 185, 129, 0.25); border-color: rgba(16, 185, 129, 0.5); color: #34d399; }
+        .btn-mgmt-sub { background: rgba(239, 68, 68, 0.25); border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+
+        .btn-use-free {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #d97706, #b45309);
+            border: 1px solid rgba(251, 191, 36, 0.4);
+            color: #ffffff;
+            border-radius: 14px;
+            font-size: 1rem;
+            font-weight: 900;
+            cursor: pointer;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 15px var(--accent-amber-glow);
+            transition: transform 0.15s;
+        }
+        .btn-use-free:active { transform: scale(0.98); }
+
+        .redeemed-banner {
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            border-radius: 14px;
+            padding: 14px;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        .redeemed-title { color: #34d399; font-weight: 900; font-size: 1.1rem; margin-bottom: 8px; }
+        .btn-toast-close {
+            background: var(--accent-red);
+            color: #ffffff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 800;
+            cursor: pointer;
+            margin-top: 6px;
+        }
+
+        /* Stamps Display Grid */
+        .visits-container {
+            display: flex;
+            align-items: baseline;
+            justify-content: center;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .visits-number { font-size: 3.8rem; font-weight: 900; color: var(--text-main); line-height: 1; }
+        .visits-total { font-size: 1.6rem; color: var(--text-muted); font-weight: 700; }
+
+        .stamps-hint { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 12px; }
+
+        .stamps-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+            margin: 12px 0;
+        }
+
+        .stamp {
+            aspect-ratio: 1;
+            background: rgba(15, 23, 42, 0.8);
+            border: 2px dashed rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            font-weight: 800;
+            color: var(--text-muted);
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .stamp:active { transform: scale(0.92); }
+
+        .stamp.active {
+            background: linear-gradient(135deg, #f97316, #ea580c);
+            border-style: solid;
+            border-color: #fdba74;
+            color: #fff;
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px var(--accent-sauna-glow);
+        }
+
+        .stamp.reward { border-color: rgba(239, 68, 68, 0.4); }
+        .stamp.reward.active {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            border-color: #fca5a5;
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+        }
+
+        .reset-toast {
+            font-size: 0.85rem;
+            color: #60a5fa;
+            text-align: center;
+            margin-top: 12px;
+            font-weight: 700;
+        }
+
+        .btn-close-card {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            color: #ffffff;
+            border-radius: 14px;
+            font-size: 1rem;
+            font-weight: 800;
+            cursor: pointer;
+            margin-top: 16px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            box-shadow: 0 4px 15px var(--accent-red-glow);
+        }
+
+        .btn-close-card:active { transform: scale(0.98); opacity: 0.9; }
+
+        /* =====================================================================
+           FOOTER MANUAL SEARCH BAR
+           ===================================================================== */
+        .footer-actions { display: flex; gap: 10px; margin-top: 4px; }
+
+        .manual-input-box {
+            flex: 1;
+            display: flex;
+            gap: 8px;
+            background: var(--card-bg);
+            padding: 8px;
+            border-radius: 12px;
+            border: 1px solid var(--card-border);
+        }
+
+        .manual-input-box input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            padding: 8px 12px;
+            color: #fff;
+            font-size: 0.95rem;
+            outline: none;
+        }
+
+        .btn-search {
+            background: var(--accent-green) !important;
+            color: #ffffff !important;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 800;
+            cursor: pointer;
+            box-shadow: 0 4px 12px var(--accent-green-glow);
+            transition: transform 0.15s;
+        }
+        .btn-search:active { transform: scale(0.95); }
+
+        /* =====================================================================
+           MODAL OVERLAYS (REDEMPTION CONFIRMATION & MANAGEMENT PANEL)
+           ===================================================================== */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(6px);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .modal-card {
+            background: var(--card-bg);
+            border: 2px solid var(--accent-sauna);
+            border-radius: 24px;
+            padding: 24px;
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 10px 40px var(--accent-sauna-glow);
+            animation: popIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        @keyframes popIn {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .modal-icon { font-size: 2.8rem; margin-bottom: -8px; }
+        .modal-card h2 { font-size: 1.4rem; font-weight: 900; color: #fff; }
+        .modal-card p { font-size: 0.9rem; color: var(--text-muted); line-height: 1.4; }
+
+        .modal-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+        .btn-modal {
+            padding: 14px;
+            border: none;
+            border-radius: 14px;
+            font-size: 1.1rem;
+            font-weight: 900;
+            cursor: pointer;
+            color: #ffffff !important;
+            transition: transform 0.15s;
+        }
+        .btn-modal:active { transform: scale(0.95); }
+        .btn-modal-tak { background: var(--accent-green); box-shadow: 0 4px 15px var(--accent-green-glow); }
+        .btn-modal-nie { background: #ef4444; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3); }
+
+        /* Settings Daily Report Box */
+        .report-box {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 12px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            text-align: center;
+        }
+
+        .report-item-val { font-size: 1.8rem; font-weight: 900; color: #fff; }
+        .report-item-lbl { font-size: 0.7rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; }
+
+        /* Settings Environment Switcher */
+        .env-control-group {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .env-row { display: flex; justify-content: space-between; align-items: center; }
+
+        .slide-switch {
+            position: relative;
+            width: 110px;
+            height: 34px;
+            background: rgba(15, 23, 42, 0.8);
+            border-radius: 18px;
+            border: 1px solid var(--card-border);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            padding: 3px;
+            user-select: none;
+        }
+
+        .slide-switch-option { flex: 1; text-align: center; font-size: 0.75rem; font-weight: 900; z-index: 2; color: var(--text-muted); }
+        .slide-switch-option.active { color: #ffffff; }
+
+        .slide-switch-slider {
+            position: absolute;
+            top: 3px; left: 3px;
+            width: 51px; height: 26px;
+            background: var(--accent-sauna);
+            border-radius: 14px;
+            transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.25s;
+            z-index: 1;
+        }
+
+        .slide-switch.is-test .slide-switch-slider { transform: translateX(51px); background: var(--accent-blue); }
+
+        .test-subcontrols { display: flex; flex-direction: column; gap: 8px; }
+        .test-days-row { display: flex; gap: 8px; }
+
+        .btn-test-day {
+            flex: 1; padding: 8px; font-size: 0.75rem; font-weight: 800; border: none;
+            border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer;
+        }
+        .btn-test-day.active { background: var(--accent-blue); color: #ffffff; }
+
+        .btn-clear-test-db {
+            width: 100%; padding: 8px; background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; border-radius: 8px;
+            font-size: 0.75rem; font-weight: 800; cursor: pointer;
+        }
+
+        .btn-modal-backup {
+            width: 100%;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--card-border);
+            color: #ffffff;
+            border-radius: 12px;
+            font-weight: 800;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .btn-modal-backup:active { background: rgba(255, 255, 255, 0.18); }
+
+        .btn-close-modal {
+            width: 100%; padding: 12px; background: rgba(255,255,255,0.1);
+            border: none; color: #fff; border-radius: 12px; font-weight: 800; cursor: pointer;
+        }
+
+        /* Footer Copyright */
+        footer {
+            margin-top: auto; padding-top: 16px; padding-bottom: 8px;
+            text-align: center; font-size: 0.75rem; color: var(--text-muted); opacity: 0.8;
+        }
+
+        .version-badge {
+            font-weight: 800; color: var(--accent-sauna); background: rgba(249, 115, 22, 0.12);
+            padding: 2px 8px; border-radius: 6px; border: 1px solid rgba(249, 115, 22, 0.25); margin-left: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- =====================================================================
+         HEADER SECTION
+         ===================================================================== -->
+    <header>
+        <div class="logo-group">
+            <span class="logo-icon">🔥</span>
+            <div>
+                <h1>THERMA SILESIA</h1>
+                <div class="subtitle">System Lojalnościowy</div>
+            </div>
+        </div>
+        <div class="header-controls">
+            <!-- Dynamic Active Day Rule Badge -->
+            <div id="dayBadge" class="day-indicator day-active">PN - CZW</div>
+            <!-- Settings & Management Button with dynamic environment color ring -->
+            <button id="btnSettings" class="btn-header-settings env-prod" title="Ustawienia i Raport" onclick="openSettingsModal()">⚙️</button>
+        </div>
+    </header>
+
+    <!-- =====================================================================
+         MODE SWITCHER (AUTO VISIT ADDITION vs READ-ONLY MODE)
+         ===================================================================== -->
+    <div class="mode-container">
+        <button id="btnAuto" class="btn-mode active-auto" onclick="setMode('auto')">
+            ⚡ Dodawanie Wizyty
+        </button>
+        <button id="btnRead" class="btn-mode" onclick="setMode('read')">
+            🔍 Tryb Odczytu
+        </button>
+    </div>
+
+    <!-- =====================================================================
+         CAMERA SCANNER CARD
+         ===================================================================== -->
+    <div class="scanner-card">
+        <div id="reader"></div>
+        <button class="btn-cam-trigger" onclick="initCamera()">📷 Włącz / Zresetuj Kamerę</button>
+    </div>
+
+    <!-- =====================================================================
+         CARD RESULT DISPLAY PANEL
+         ===================================================================== -->
+    <div id="resultCard" class="result-card" style="display: none;">
+        <div style="text-align: center;">
+            <!-- Status Badge (Auto Added / Read Only / Already Scanned) -->
+            <div id="modeBadge" class="status-badge badge-auto">⚡ WIZYTA DODANA AUTOMATYCZNIE</div>
+            <div></div>
+            
+            <!-- Human-Readable Loyalty Card Number (#100, #101...) -->
+            <div class="token-info" id="displayLoyaltyNum">Karta #100</div>
+
+            <!-- Stored Free Visits Bank Counter -->
+            <div id="freeEntriesBadge" class="free-entries-badge" style="display:none;">
+                🎁 Dostępne Darmowe Wejścia: <span id="displayFreeEntriesCount">0</span>
+            </div>
+
+            <!-- Manual Management Controls for Staff (+1 / -1 Free Visit) -->
+            <div class="manual-free-controls">
+                <button class="btn-mgmt-free btn-mgmt-add" onclick="addFreeEntryManual()">+ Dodaj Darmowe</button>
+                <button class="btn-mgmt-free btn-mgmt-sub" onclick="removeFreeEntryManual()">- Usuń Darmowe</button>
+            </div>
+
+            <!-- Success Notification Toast for Free Entry Redemption -->
+            <div id="redeemedToast" class="redeemed-banner" style="display:none;">
+                <div class="redeemed-title">🎉 Darmowe Wejście Odebrane!</div>
+                <button id="btnToastClose" class="btn-toast-close" onclick="closeToastBanner()">Zamknij</button>
+            </div>
+
+            <!-- Redeem Stored Free Visit Button (Active Mon-Thu if Free Visits > 0) -->
+            <button id="btnUseFreeEntry" class="btn-use-free" style="display:none;" onclick="handleUseFreeEntryClick()">
+                🎁 Wykorzystaj darmowe wejście
+            </button>
+            
+            <!-- Current Stamps Ratio Display -->
+            <div class="visits-container">
+                <span class="visits-number" id="displayVisits">0</span>
+                <span class="visits-total">/ 10</span>
+            </div>
+
+            <div class="stamps-hint">💡 Kliknij wolną pieczątkę, aby dodać (+1), lub aktywną, aby odjąć (-1).</div>
+
+            <!-- Interactive Stamps Grid -->
+            <div class="stamps-grid" id="stampsGrid"></div>
+
+            <!-- 15-Second Auto Close Timer Toast -->
+            <div id="resetToast" class="reset-toast" style="display:none;">
+                ⏱️ Automatyczne zamknięcie za <span id="timerSec">15</span>s...
+            </div>
+
+            <!-- Close Card Button -->
+            <button class="btn-close-card" onclick="closeCard()">
+                ✖ Zamknij Kartę
+            </button>
+        </div>
+    </div>
+
+    <!-- =====================================================================
+         DYNAMIC EMPTY STATE BOX
+         ===================================================================== -->
+    <div id="emptyState" class="result-card" style="text-align: center; color: var(--text-muted); padding: 30px;">
+        📷 Skieruj aparat na kod QR klienta z odległości 15-20 cm.
+    </div>
+
+    <!-- =====================================================================
+         FOOTER MANUAL CARD SEARCH BAR
+         ===================================================================== -->
+    <div class="footer-actions">
+        <div class="manual-input-box">
+            <input type="text" id="manualToken" placeholder="Wpisz nr karty (np. 100) lub QR..." onkeydown="if(event.key === 'Enter') processManualInput()">
+            <button class="btn-search" onclick="processManualInput()">Szukaj</button>
+        </div>
+    </div>
+
+    <!-- =====================================================================
+         MODAL 1: 10TH VISIT REWARD REDEMPTION CONFIRMATION DIALOG
+         ===================================================================== -->
+    <div id="freeVisitModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-icon">🎁</div>
+            <h2>Wizyta Darmowa</h2>
+            <p id="modalDescriptionText">To jest 10. wizyta! Czy chcesz użyć darmowej wizyty teraz?</p>
+            <div class="modal-buttons">
+                <button class="btn-modal btn-modal-tak" onclick="confirmFreeVisit(true)">TAK</button>
+                <button class="btn-modal btn-modal-nie" onclick="confirmFreeVisit(false)">NIE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- =====================================================================
+         MODAL 2: MANAGEMENT PANEL & DAILY REPORT
+         ===================================================================== -->
+    <div id="settingsModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h2>⚙️ Panel Zarządzania</h2>
+
+            <!-- Live Daily Report -->
+            <div style="text-align:left; font-size:0.8rem; font-weight:800; color:var(--text-muted);">📊 RAPORT DOBOWY (DZISIAJ)</div>
+            <div class="report-box">
+                <div>
+                    <div class="report-item-val" id="reportTodayScans">0</div>
+                    <div class="report-item-lbl">Dzisiejsze Skany</div>
+                </div>
+                <div>
+                    <div class="report-item-val" id="reportTodayFree">0</div>
+                    <div class="report-item-lbl">Wydane Darmowe</div>
+                </div>
+            </div>
+
+            <!-- Environment Configuration (PROD vs TEST) -->
+            <div style="text-align:left; font-size:0.8rem; font-weight:800; color:var(--text-muted);">🛠️ KONFIGURACJA ŚRODOWISKA</div>
+            <div class="env-control-group">
+                <div class="env-row">
+                    <span style="font-size:0.85rem; font-weight:800;">Tryb Bazy:</span>
+                    <div id="envSwitch" class="slide-switch" onclick="toggleEnvMode()">
+                        <div id="optProd" class="slide-switch-option active">PROD</div>
+                        <div id="optTest" class="slide-switch-option">TEST</div>
+                        <div class="slide-switch-slider"></div>
+                    </div>
+                </div>
+                <div id="testSubControls" class="test-subcontrols" style="display: none;">
+                    <div class="test-days-row">
+                        <button id="btnTestMonThu" class="btn-test-day active" onclick="setTestDay('mon-thu')">Pn - Czw (Odbiór OK)</button>
+                        <button id="btnTestFriSun" class="btn-test-day" onclick="setTestDay('fri-sun')">Pt - ND (Zbieranie)</button>
+                    </div>
+                    <button class="btn-clear-test-db" onclick="clearTestDatabase()">🗑️ Wyczyszcz BAZĘ TESTOWĄ do zera</button>
+                </div>
+            </div>
+
+            <!-- Backup Download Action -->
+            <div style="text-align:left; font-size:0.8rem; font-weight:800; color:var(--text-muted);">💾 KOPIA ZAPASOWA</div>
+            <button class="btn-modal-backup" onclick="exportBackup()">
+                💾 Pobierz Kopię Zapasową Bazy (JSON)
+            </button>
+
+            <button class="btn-close-modal" onclick="closeSettingsModal()">Zamknij Ustawienia</button>
+        </div>
+    </div>
+
+    <!-- =====================================================================
+         FOOTER
+         ===================================================================== -->
+    <footer>
+        Therma Silesia Loyalty • Wersja <span class="version-badge">v1.4</span>
+    </footer>
+
+    <!-- =====================================================================
+         APPLICATION JAVASCRIPT LOGIC
+         ===================================================================== -->
+    <script>
+        /* ---------------------------------------------------------------------
+           GLOBAL APPLICATION STATE VARIABLES
+           --------------------------------------------------------------------- */
+
+        /** @type {'auto' | 'read'} Active scanner mode: 'auto' increments visits, 'read' views card without changes */
+        let currentMode = 'auto';
+
+        /** @type {string | null} Holds the raw QR token string of the currently active/viewed card */
+        let currentToken = null;
+
+        /** @type {boolean} Anti-bounce cooldown flag to prevent double scanning within 2.5 seconds */
+        let scanCooldown = false;
+
+        /** @type {number | null} Timeout handle for 15-second automatic card view closure */
+        let autoResetTimer = null;
+
+        /** @type {number | null} Interval handle for updating the 15-second countdown timer text */
+        let countdownInterval = null;
+
+        /** @type {number | null} Timeout handle for auto-closing the "Free Entry Redeemed" toast notification */
+        let toastAutoCloseTimer = null;
+
+        /** @type {Html5Qrcode | null} Holds the instance of the html5-qrcode camera scanner library */
+        let html5QrCode = null;
+
+        /** @type {string | null} Holds the card token pending user confirmation in the 10th visit reward modal */
+        let pending10thToken = null;
+
+        /** @type {'prod' | 'test'} Active database environment mode ('prod' uses real DB, 'test' uses sandbox DB) */
+        let envMode = 'prod';
+
+        /** @type {'mon-thu' | 'fri-sun'} Simulated day of week rule mode when running in 'test' environment */
+        let testDayMode = 'mon-thu';
+
+        /* ---------------------------------------------------------------------
+           DATABASE MANAGEMENT FUNCTIONS (LocalStorage Engine)
+           --------------------------------------------------------------------- */
+
+        /**
+         * Resolves the active LocalStorage key based on the current environment mode.
+         * @returns {string} Storage key name ('ts_cards_db_prod' or 'ts_cards_db_test')
+         */
+        function getDbKey() {
+            return envMode === 'test' ? 'ts_cards_db_test' : 'ts_cards_db_prod';
+        }
+
+        /**
+         * Fetches the current database object from LocalStorage. Includes backward-compatible migration.
+         * @returns {Object<string, {visits: number, loyaltyNum: number, available_free_entries: number, rewards_claimed: number, history: string[], free_history: string[]}>}
+         */
+        function getDB() {
+            const key = getDbKey();
+            // Backward compatibility migration: If new prod DB is empty, copy over legacy 'ts_cards_db'
+            if (key === 'ts_cards_db_prod' && !localStorage.getItem('ts_cards_db_prod') && localStorage.getItem('ts_cards_db')) {
+                localStorage.setItem('ts_cards_db_prod', localStorage.getItem('ts_cards_db'));
+            }
+            return JSON.parse(localStorage.getItem(key) || '{}');
+        }
+
+        /**
+         * Persists the database object into LocalStorage under the active environment key.
+         * @param {Object} db - The database object to save.
+         */
+        function saveDB(db) {
+            localStorage.setItem(getDbKey(), JSON.stringify(db));
+        }
+
+        /* ---------------------------------------------------------------------
+           MANAGEMENT PANEL & REPORTING FUNCTIONS
+           --------------------------------------------------------------------- */
+
+        /** Opens the settings and management panel modal, triggering a daily report refresh. */
+        function openSettingsModal() {
+            updateDailyReport();
+            document.getElementById('settingsModal').style.display = 'flex';
+        }
+
+        /** Closes the settings and management panel modal. */
+        function closeSettingsModal() {
+            document.getElementById('settingsModal').style.display = 'none';
+        }
+
+        /** Calculates and renders today's total scans and redeemed free visits for the active database. */
+        function updateDailyReport() {
+            let db = getDB();
+            let todayStr = new Date().toLocaleDateString('sv-SE'); // Format YYYY-MM-DD
+            let scansCount = 0;
+            let freeRedeemedCount = 0;
+
+            for (let key in db) {
+                let card = db[key];
+                // Count scans today
+                if (card && card.history && Array.isArray(card.history)) {
+                    card.history.forEach(ts => {
+                        if (new Date(ts).toLocaleDateString('sv-SE') === todayStr) {
+                            scansCount++;
+                        }
+                    });
+                }
+                // Count free visits redeemed today
+                if (card && card.free_history && Array.isArray(card.free_history)) {
+                    card.free_history.forEach(ts => {
+                        if (new Date(ts).toLocaleDateString('sv-SE') === todayStr) {
+                            freeRedeemedCount++;
+                        }
+                    });
+                }
+            }
+
+            document.getElementById('reportTodayScans').innerText = scansCount;
+            document.getElementById('reportTodayFree').innerText = freeRedeemedCount;
+        }
+
+        /** Toggles between PROD and TEST environment modes and resets active card views. */
+        function toggleEnvMode() {
+            closeCard();
+            envMode = (envMode === 'prod') ? 'test' : 'prod';
+            const switchEl = document.getElementById('envSwitch');
+            const subControls = document.getElementById('testSubControls');
+            const prodOpt = document.getElementById('optProd');
+            const testOpt = document.getElementById('optTest');
+
+            if (envMode === 'test') {
+                switchEl.classList.add('is-test');
+                prodOpt.classList.remove('active');
+                testOpt.classList.add('active');
+                subControls.style.display = 'flex';
+            } else {
+                switchEl.classList.remove('is-test');
+                prodOpt.classList.add('active');
+                testOpt.classList.remove('active');
+                subControls.style.display = 'none';
+            }
+            updateDayIndicator();
+            updateDailyReport();
+        }
+
+        /**
+         * Sets the simulated day of week rule when testing.
+         * @param {'mon-thu' | 'fri-sun'} dayMode 
+         */
+        function setTestDay(dayMode) {
+            testDayMode = dayMode;
+            const btnMon = document.getElementById('btnTestMonThu');
+            const btnFri = document.getElementById('btnTestFriSun');
+            if (dayMode === 'mon-thu') {
+                btnMon.className = 'btn-test-day active';
+                btnFri.className = 'btn-test-day';
+            } else {
+                btnMon.className = 'btn-test-day';
+                btnFri.className = 'btn-test-day active';
+            }
+            updateDayIndicator();
+        }
+
+        /** Clears only the TEST database ('ts_cards_db_test') after user confirmation. */
+        function clearTestDatabase() {
+            if (confirm('Czy na pewno chcesz wyczyszcz baze testową (TEST) do zera? Baza produkcyjna (PROD) pozostanie nietknięta.')) {
+                localStorage.removeItem('ts_cards_db_test');
+                closeCard();
+                updateDailyReport();
+                alert('🧹 Baza testowa została wyczyszczona.');
+            }
+        }
+
+        /* ---------------------------------------------------------------------
+           DAY-OF-WEEK BUSINESS RULE LOGIC
+           --------------------------------------------------------------------- */
+
+        /**
+         * Checks whether the active date rule allows free visit redemptions (Mon-Thu).
+         * @returns {boolean} True if redemption is allowed (Mon-Thu), false if weekend rules apply (Fri-Sun).
+         */
+        function isMonToThu() {
+            if (envMode === 'test') {
+                return testDayMode === 'mon-thu';
+            }
+            const day = new Date().getDay(); // 0 = Sunday, 1 = Monday, ..., 4 = Thursday
+            return day >= 1 && day <= 4;
+        }
+
+        /** Updates the header day badge indicator and settings icon status ring. */
+        function updateDayIndicator() {
+            const badge = document.getElementById('dayBadge');
+            const btnSettings = document.getElementById('btnSettings');
+            const isMonCzw = isMonToThu();
+            const prefix = (envMode === 'test') ? '🧪 TEST: ' : '';
+
+            if (isMonCzw) {
+                badge.className = 'day-indicator day-active';
+                badge.innerText = prefix + 'PN - CZW (ODBIÓR OK)';
+            } else {
+                badge.className = 'day-indicator day-weekend';
+                badge.innerText = prefix + 'PT - ND (ZBIERANIE)';
+            }
+
+            // Update settings icon border ring (Green = PROD, Red = TEST)
+            if (btnSettings) {
+                if (envMode === 'test') {
+                    btnSettings.className = 'btn-header-settings env-test';
+                } else {
+                    btnSettings.className = 'btn-header-settings env-prod';
+                }
+            }
+        }
+
+        /* ---------------------------------------------------------------------
+           AUDIO & UI TIMER UTILITIES
+           --------------------------------------------------------------------- */
+
+        /**
+         * Plays a synthesized audio frequency tone via Web Audio API.
+         * @param {number} freq - Sound frequency in Hz (e.g. 880 for high beep, 440 for low tone).
+         * @param {number} duration - Sound duration in seconds.
+         */
+        function playBeep(freq = 880, duration = 0.15) {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                gain.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + duration);
+                osc.stop(ctx.currentTime + duration);
+            } catch(e) {}
+        }
+
+        /**
+         * Switches the application scanner mode between Automatic and Read-Only.
+         * @param {'auto' | 'read'} mode 
+         */
+        function setMode(mode) {
+            currentMode = mode;
+            clearAutoResetTimer();
+
+            const btnAuto = document.getElementById('btnAuto');
+            const btnRead = document.getElementById('btnRead');
+            const scannerCard = document.querySelector('.scanner-card');
+            const emptyState = document.getElementById('emptyState');
+
+            if (mode === 'auto') {
+                btnAuto.className = 'btn-mode active-auto';
+                btnRead.className = 'btn-mode';
+                if (scannerCard) scannerCard.style.display = 'flex';
+                if (emptyState) emptyState.innerText = '📷 Skieruj aparat na kod QR klienta z odległości 15-20 cm.';
+            } else {
+                btnAuto.className = 'btn-mode';
+                btnRead.className = 'btn-mode active-read';
+                if (scannerCard) scannerCard.style.display = 'none';
+                if (emptyState) emptyState.innerText = '🔍 Wpisz numer karty lub kod QR w polu poniżej, aby wyszukać.';
+            }
+        }
+
+        /** Clears any active 15-second auto-close timers and countdowns. */
+        function clearAutoResetTimer() {
+            if (autoResetTimer) clearTimeout(autoResetTimer);
+            if (countdownInterval) clearInterval(countdownInterval);
+            document.getElementById('resetToast').style.display = 'none';
+        }
+
+        /** Starts the 15-second automatic card closure countdown timer. */
+        function start15sAutoCloseTimer() {
+            clearAutoResetTimer();
+            const toast = document.getElementById('resetToast');
+            const timerSpan = document.getElementById('timerSec');
+            
+            toast.style.display = 'block';
+            let timeLeft = 15;
+            timerSpan.innerText = timeLeft;
+
+            countdownInterval = setInterval(() => {
+                timeLeft--;
+                timerSpan.innerText = timeLeft;
+                if (timeLeft <= 0) {
+                    clearInterval(countdownInterval);
+                }
+            }, 1000);
+
+            autoResetTimer = setTimeout(() => {
+                closeCard();
+            }, 15000);
+        }
+
+        /** Resets the UI, closes active card view, and returns to automatic scanning mode. */
+        function closeCard() {
+            clearAutoResetTimer();
+            if (toastAutoCloseTimer) clearTimeout(toastAutoCloseTimer);
+            currentToken = null;
+            document.getElementById('resultCard').style.display = 'none';
+            document.getElementById('emptyState').style.display = 'block';
+            document.getElementById('redeemedToast').style.display = 'none';
+            setMode('auto');
+        }
+
+        /** Closes the free entry redemption toast banner manually. */
+        function closeToastBanner() {
+            if (toastAutoCloseTimer) clearTimeout(toastAutoCloseTimer);
+            document.getElementById('redeemedToast').style.display = 'none';
+        }
+
+        /** Displays the redemption success banner and auto-hides it after 3 seconds. */
+        function showRedeemedToast() {
+            const toast = document.getElementById('redeemedToast');
+            toast.style.display = 'block';
+            if (toastAutoCloseTimer) clearTimeout(toastAutoCloseTimer);
+            toastAutoCloseTimer = setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+
+        /* ---------------------------------------------------------------------
+           LOYALTY CARD ENGINE & BUSINESS LOGIC
+           --------------------------------------------------------------------- */
+
+        /**
+         * Retrieves the human-readable Loyalty Number (#100, #101...) or assigns the next sequential ID for new cards.
+         * @param {string} rawToken - The raw QR code token.
+         * @param {Object} db - The active database instance.
+         * @returns {number} Assigned loyalty number.
+         */
+        function getOrAssignLoyaltyNumber(rawToken, db) {
+            if (!db[rawToken]) return 100;
+            if (db[rawToken].loyaltyNum && typeof db[rawToken].loyaltyNum === 'number') {
+                return db[rawToken].loyaltyNum;
+            }
+            let maxNum = 99;
+            for (let key in db) {
+                if (db[key] && typeof db[key].loyaltyNum === 'number') {
+                    if (db[key].loyaltyNum > maxNum) maxNum = db[key].loyaltyNum;
+                }
+            }
+            let nextNum = maxNum + 1;
+            db[rawToken].loyaltyNum = nextNum;
+            saveDB(db);
+            return nextNum;
+        }
+
+        /**
+         * Checks if a card has already been scanned today.
+         * @param {Object} cardData - Card data object.
+         * @returns {boolean} True if scanned today, false otherwise.
+         */
+        function isScannedToday(cardData) {
+            if (!cardData || !cardData.history || !Array.isArray(cardData.history)) return false;
+            const todayStr = new Date().toLocaleDateString('sv-SE');
+            return cardData.history.some(ts => {
+                return new Date(ts).toLocaleDateString('sv-SE') === todayStr;
+            });
+        }
+
+        /** Manual override function: Adds +1 Available Free Visit. */
+        function addFreeEntryManual() {
+            if (!currentToken) return;
+            let db = getDB();
+            if (!db[currentToken]) return;
+            db[currentToken].available_free_entries = (db[currentToken].available_free_entries || 0) + 1;
+            saveDB(db);
+            playBeep(880);
+            renderCardResult(currentToken, db[currentToken]);
+            start15sAutoCloseTimer();
+        }
+
+        /** Manual override function: Removes -1 Available Free Visit with zero-floor enforcement. */
+        function removeFreeEntryManual() {
+            if (!currentToken) return;
+            let db = getDB();
+            if (!db[currentToken]) return;
+            let current = db[currentToken].available_free_entries || 0;
+            if (current <= 0) return; // Strict zero-floor guard
+            db[currentToken].available_free_entries = current - 1;
+            saveDB(db);
+            playBeep(440);
+            renderCardResult(currentToken, db[currentToken]);
+            start15sAutoCloseTimer();
+        }
+
+        /** Handles clicking the Amber "Redeem Stored Free Visit" button. */
+        function handleUseFreeEntryClick() {
+            if (!currentToken) return;
+            if (!isMonToThu()) {
+                alert('⚠️ Darmowe wejścia można wykorzystywać tylko od poniedziałku do czwartku!');
+                return;
+            }
+
+            let db = getDB();
+            if (db[currentToken] && (db[currentToken].available_free_entries || 0) > 0) {
+                db[currentToken].available_free_entries -= 1;
+                db[currentToken].free_history = db[currentToken].free_history || [];
+                db[currentToken].free_history.push(new Date().toISOString());
+                saveDB(db);
+                playBeep(1200, 0.25);
+                renderCardResult(currentToken, db[currentToken]);
+                showRedeemedToast();
+                start15sAutoCloseTimer();
+            }
+        }
+
+        /** Opens the modal dialog prompting staff on how to handle a 10th visit. */
+        function prompt10thVisit(token, availableFreeCount) {
+            clearAutoResetTimer();
+            pending10thToken = token;
+            const desc = document.getElementById('modalDescriptionText');
+            if (availableFreeCount > 0) {
+                desc.innerText = `Masz 10 pieczątek oraz ${availableFreeCount} darmowe wejście na koncie. Czy chcesz użyć darmowej wizyty dzisiaj?`;
+            } else {
+                desc.innerText = `To jest 10. wizyta! Czy chcesz użyć darmowej wizyty dzisiaj?`;
+            }
+            document.getElementById('freeVisitModal').style.display = 'flex';
+        }
+
+        /**
+         * Confirms decision from the 10th visit reward modal.
+         * @param {boolean} isYes - True if redeeming reward today (free entry), false if paying for today's entry.
+         */
+        function confirmFreeVisit(isYes) {
+            document.getElementById('freeVisitModal').style.display = 'none';
+            if (!pending10thToken) return;
+
+            let token = pending10thToken;
+            pending10thToken = null;
+            let db = getDB();
+            if (!db[token]) return;
+
+            let freeCount = db[token].available_free_entries || 0;
+
+            if (isYes) {
+                // YES -> Today's 10th visit is FREE!
+                // Stored banked free visits (freeCount) remain untouched. Stamps reset to 0.
+                if (freeCount === 0) {
+                    db[token].rewards_claimed = (db[token].rewards_claimed || 0) + 1;
+                }
+                db[token].visits = 0;
+                db[token].history.push(new Date().toISOString());
+                db[token].free_history = db[token].free_history || [];
+                db[token].free_history.push(new Date().toISOString());
+                saveDB(db);
+                playBeep(1200, 0.25);
+                renderCardResult(token, db[token], 'REWARD_CLAIMED');
+                showRedeemedToast();
+                start15sAutoCloseTimer();
+            } else {
+                // NO -> Customer pays for today's 10th visit.
+                // The 10 stamps collected on the card convert to +1 Banked Free Visit.
+                // Stamps reset to 0 (because today's paid 10th visit completed the full card).
+                db[token].available_free_entries = freeCount + 1;
+                db[token].visits = 0; // Correct reset to 0
+                db[token].history.push(new Date().toISOString());
+                saveDB(db);
+                playBeep(880);
+                renderCardResult(token, db[token]);
+                start15sAutoCloseTimer();
+            }
+        }
+
+        /**
+         * Primary handler executed when a QR code token is scanned or manually submitted.
+         * @param {string} token - The raw QR token string.
+         */
+        function handleScan(token) {
+            if (scanCooldown) return;
+            scanCooldown = true;
+            setTimeout(() => { scanCooldown = false; }, 2500);
+
+            let db = getDB();
+            if (!db[token]) {
+                db[token] = { visits: 0, rewards_claimed: 0, available_free_entries: 0, history: [], free_history: [] };
+            }
+
+            getOrAssignLoyaltyNumber(token, db);
+
+            if (currentMode === 'auto') {
+                // Guard: Prevent double scanning on the same day
+                if (isScannedToday(db[token])) {
+                    playBeep(587);
+                    setMode('read');
+                    currentToken = token;
+                    renderCardResult(token, db[token], 'ALREADY_SCANNED_TODAY');
+                    start15sAutoCloseTimer();
+                    return;
+                }
+
+                let currentStamps = db[token].visits % 10;
+                if (db[token].visits > 0 && currentStamps === 0) currentStamps = 10;
+
+                let freeCount = db[token].available_free_entries || 0;
+
+                // Handle 10th Stamp milestone
+                if (currentStamps === 9) {
+                    currentToken = token;
+                    if (isMonToThu()) {
+                        playBeep(880);
+                        renderCardResult(token, db[token]);
+                        prompt10thVisit(token, freeCount);
+                        return;
+                    } else {
+                        // Weekend Rule: Automatic conversion of 10 stamps to +1 Banked Free Visit
+                        playBeep(880);
+                        db[token].visits = 0;
+                        db[token].available_free_entries = freeCount + 1;
+                        db[token].history.push(new Date().toISOString());
+                        saveDB(db);
+                        renderCardResult(token, db[token], 'WEEKEND_CONVERTED');
+                        start15sAutoCloseTimer();
+                        return;
+                    }
+                }
+
+                // Standard Visit Addition (+1)
+                playBeep(880);
+                db[token].visits += 1;
+                db[token].history.push(new Date().toISOString());
+                saveDB(db);
+                currentToken = token;
+                renderCardResult(token, db[token]);
+                start15sAutoCloseTimer();
+            } else {
+                // Read-Only Mode
+                playBeep(587);
+                currentToken = token;
+                renderCardResult(token, db[token]);
+                start15sAutoCloseTimer();
+            }
+        }
+
+        /**
+         * Manual stamp interaction handler (+1 when clicking an empty stamp, -1 when clicking an active stamp).
+         * @param {number} stampIndex - Index of the clicked stamp (1-10).
+         */
+        function handleStampClick(stampIndex) {
+            if (!currentToken) return;
+            let db = getDB();
+            if (!db[currentToken]) return;
+
+            let currentStamps = db[currentToken].visits % 10;
+            if (db[currentToken].visits > 0 && currentStamps === 0) currentStamps = 10;
+
+            let freeCount = db[currentToken].available_free_entries || 0;
+
+            if (stampIndex > currentStamps) {
+                if (currentStamps === 9) {
+                    if (isMonToThu()) {
+                        prompt10thVisit(currentToken, freeCount);
+                    } else {
+                        db[currentToken].visits = 0;
+                        db[currentToken].available_free_entries = freeCount + 1;
+                        db[currentToken].history.push(new Date().toISOString());
+                        saveDB(db);
+                        playBeep(880);
+                        renderCardResult(currentToken, db[currentToken], 'WEEKEND_CONVERTED');
+                        start15sAutoCloseTimer();
+                    }
+                } else {
+                    db[currentToken].visits += 1;
+                    db[currentToken].history.push(new Date().toISOString());
+                    saveDB(db);
+                    playBeep(880);
+                    renderCardResult(currentToken, db[currentToken]);
+                    start15sAutoCloseTimer();
+                }
+            } else {
+                if (db[currentToken].visits > 0) {
+                    db[currentToken].visits -= 1;
+                    saveDB(db);
+                    playBeep(440);
+                    renderCardResult(currentToken, db[currentToken]);
+                    start15sAutoCloseTimer();
+                }
+            }
+        }
+
+        /**
+         * Renders card data, stamps grid, badges, and controls on the screen.
+         * @param {string} token - Card token ID.
+         * @param {Object} cardData - Card data object.
+         * @param {string | null} statusOverride - Optional status text override.
+         */
+        function renderCardResult(token, cardData, statusOverride = null) {
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('resultCard').style.display = 'block';
+
+            const badge = document.getElementById('modeBadge');
+
+            if (statusOverride === 'ALREADY_SCANNED_TODAY') {
+                badge.className = 'status-badge badge-warn';
+                badge.innerText = '⚠️ KARTA ZOSTAŁA JUŻ DZIŚ ZESKANOWANA!';
+            } else if (statusOverride === 'REWARD_CLAIMED') {
+                badge.className = 'status-badge badge-auto';
+                badge.innerText = '🎁 DARMOWE WEJŚCIE ODEBRANE!';
+            } else if (statusOverride === 'WEEKEND_CONVERTED') {
+                badge.className = 'status-badge badge-warn';
+                badge.innerText = 'ℹ️ 10 WIZYT! DODANO +1 DARMOWE WEJŚCIE (DO UŻYCIA PN-CZW)';
+            } else if (currentMode === 'auto') {
+                badge.className = 'status-badge badge-auto';
+                badge.innerText = '⚡ WIZYTA DODANA AUTOMATYCZNIE (+1)';
+            } else {
+                badge.className = 'status-badge badge-read';
+                badge.innerText = '🔍 TRYB ODCZYTU (BEZ ZMIAN)';
+            }
+
+            const loyaltyNum = cardData.loyaltyNum || 100;
+            document.getElementById('displayLoyaltyNum').innerText = `Karta #${loyaltyNum}`;
+
+            const freeCount = cardData.available_free_entries || 0;
+            const freeBadge = document.getElementById('freeEntriesBadge');
+            const btnUseFree = document.getElementById('btnUseFreeEntry');
+
+            if (freeCount > 0) {
+                freeBadge.style.display = 'inline-block';
+                document.getElementById('displayFreeEntriesCount').innerText = freeCount;
+                btnUseFree.style.display = 'block';
+            } else {
+                freeBadge.style.display = 'none';
+                btnUseFree.style.display = 'none';
+            }
+            
+            let currentStamps = cardData.visits % 10;
+            if (cardData.visits > 0 && currentStamps === 0) currentStamps = 10;
+
+            document.getElementById('displayVisits').innerText = currentStamps;
+
+            const stampsGrid = document.getElementById('stampsGrid');
+            stampsGrid.innerHTML = '';
+            for (let i = 1; i <= 10; i++) {
+                const stamp = document.createElement('div');
+                stamp.className = 'stamp';
+                if (i === 10) stamp.classList.add('reward');
+                
+                if (i <= currentStamps) {
+                    stamp.classList.add('active');
+                    stamp.innerText = i === 10 ? '🎁' : '✓';
+                } else {
+                    stamp.innerText = i;
+                }
+
+                stamp.onclick = () => handleStampClick(i);
+                stampsGrid.appendChild(stamp);
+            }
+        }
+
+        /** Process manual input search by simple Loyalty Number (#100) or raw QR token. Switches to Read Mode. */
+        function processManualInput() {
+            const input = document.getElementById('manualToken');
+            const val = input.value.trim();
+            if (!val) return;
+
+            let db = getDB();
+            let targetToken = null;
+
+            let parsedNum = parseInt(val.replace('#', ''), 10);
+            if (!isNaN(parsedNum)) {
+                for (let key in db) {
+                    if (db[key] && db[key].loyaltyNum === parsedNum) {
+                        targetToken = key;
+                        break;
+                    }
+                }
+            }
+
+            if (!targetToken) {
+                targetToken = val;
+            }
+
+            setMode('read');
+            handleScan(targetToken);
+            input.value = '';
+        }
+
+        /** Exports the active environment database to a downloadable JSON backup file. */
+        function exportBackup() {
+    const envTag = envMode.toUpperCase();
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0,10); // Format YYYY-MM-DD
+    const timeStr = now.toTimeString().slice(0,8).replace(/:/g, '-'); // Format HH-MM-SS
+    const timestamp = `${dateStr}_${timeStr}`;
+    
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(localStorage.getItem(getDbKey()) || '{}');
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `therma_silesia_backup_${envTag}_${timestamp}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+}
+
+        /** Initializes the HTML5 camera scanner with fallback handling for multi-lens Android devices. */
+        async function initCamera() {
+            if (html5QrCode) {
+                try { await html5QrCode.stop(); } catch(e){}
+            }
+
+            html5QrCode = new Html5Qrcode("reader", {
+                experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+            });
+
+            const config = { 
+                fps: 15, 
+                qrbox: function(viewfinderWidth, viewfinderHeight) {
+                    let minEdgeSize = Math.min(viewfinderWidth, viewfinderHeight);
+                    let qrboxSize = Math.floor(minEdgeSize * 0.75);
+                    return { width: qrboxSize, height: qrboxSize };
+                },
+                aspectRatio: 1.0
+            };
+
+            try {
+                await html5QrCode.start({ facingMode: "environment" }, config, (decodedText) => handleScan(decodedText));
+                return;
+            } catch (err1) {}
+
+            try {
+                await html5QrCode.start({ facingMode: "user" }, config, (decodedText) => handleScan(decodedText));
+                return;
+            } catch (err2) {}
+
+            try {
+                const devices = await Html5Qrcode.getCameras();
+                if (devices && devices.length > 0) {
+                    const selectedCamId = devices[devices.length - 1].id;
+                    await html5QrCode.start(selectedCamId, config, (decodedText) => handleScan(decodedText));
+                }
+            } catch (err3) {}
+        }
+
+        /* App Initialization */
+        window.addEventListener('load', () => {
+            updateDayIndicator();
+            initCamera();
+        });
+    </script>
+</body>
+</html>
